@@ -9,7 +9,9 @@
 // Vars (wrangler.toml):           TIMEZONE, ALLOWED_ORIGINS, PUBLIC_URL, TG_API (optional, for tests)
 // Staff list + shifts + Telegram links live in the D1 "settings" table and are edited at /admin.
 
-const RING_EVERY_MS = 30 * 1000;
+import ALARM_MP3 from "./alarm.bin";   // loud 4-second alarm tone, offered as the bot chat's notification sound
+
+const RING_EVERY_MS = 15 * 1000;
 const EXPIRE_AFTER_MS = 3 * 60 * 1000;
 const IP_COOLDOWN_MS = 60 * 1000;
 const MAX_OPEN_REQUESTS = 5;
@@ -30,6 +32,7 @@ export default {
       if (p === "/tg/hook" && req.method === "POST") return telegramHook(req, env, ctx);
       if ((m = p.match(/^\/staff\/([A-Za-z0-9_-]{8,64})$/))) return staffPage(env, m[1]);
       if ((m = p.match(/^\/staff\/([A-Za-z0-9_-]{8,64})\/manifest\.webmanifest$/))) return staffManifest(m[1]);
+      if (p === "/alarm.mp3") return new Response(ALARM_MP3, { headers: { "content-type": "audio/mpeg", "cache-control": "public, max-age=86400" } });
       if (p === "/staff-icon.svg") return new Response(STAFF_ICON, { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } });
       if ((m = p.match(/^\/api\/staff\/([A-Za-z0-9_-]{8,64})\/state$/)) && req.method === "GET") return staffState(env, ctx, m[1]);
       if ((m = p.match(/^\/api\/staff\/([A-Za-z0-9_-]{8,64})\/accept\/([a-z0-9]{12})$/)) && req.method === "POST") return staffAccept(env, ctx, m[1], m[2]);
@@ -248,14 +251,33 @@ async function onMessage(msg, env) {
     for (const s of data.staff) if (s.chat_id === chat && s !== person) delete s.chat_id;   // one person per phone
     person.chat_id = chat;
     await saveStaffData(env, data);
-    return tg(env, "sendMessage", { chat_id: chat, parse_mode: "HTML",
+    await tg(env, "sendMessage", { chat_id: chat, parse_mode: "HTML",
       text: `✅ Hi <b>${esc(person.name)}</b>! You're connected.\n\nYou'll get customer help alerts here during your shifts. Keep notifications on for this chat, and tap <b>Accept</b> when you're going to help.` });
+    return sendAlarmSound(env, chat);
   }
+  if (/^\/sound\b/.test(text) && data.staff.some((s) => s.chat_id === chat)) return sendAlarmSound(env, chat);
   const me = data.staff.find((s) => s.chat_id === chat);
   const reply = me
     ? `You're connected as <b>${esc(me.name)}</b>. ${me.active === false ? "Your alerts are paused." : isOnShift(me, storeNow(env)) ? "You're on shift now." : "You're off shift now."}`
     : "Hi! This bot sends store help alerts to staff. Ask the store owner for your personal link to connect.";
   return tg(env, "sendMessage", { chat_id: chat, text: reply, parse_mode: "HTML" });
+}
+
+const SOUND_STEPS = [
+  "🔊 <b>Make store alerts LOUD</b> (do this once):",
+  "",
+  "1. Press and hold this sound ▶️ and tap <b>Save for Notifications</b>.",
+  "2. Tap the bot's name at the top of this chat → <b>Notifications</b> → <b>Sound</b> → pick <b>Store Alarm</b>.",
+  "3. Android: in the same place set <b>Importance: Urgent</b>/High.",
+  "4. Turn your phone's <b>notification/ring volume up</b> and keep this chat unmuted.",
+  "",
+  "Send /sound anytime to get this again.",
+].join("\n");
+
+async function sendAlarmSound(env, chatId, origin) {
+  const base = (env.PUBLIC_URL || origin || "").replace(/\/+$/, "");
+  return tg(env, "sendAudio", { chat_id: chatId, audio: `${base}/alarm.mp3?v=1`, title: "Store Alarm", performer: "Triveni Waxhaw",
+                                caption: SOUND_STEPS, parse_mode: "HTML" });
 }
 
 function pointsFor(ms) { return ms <= 30000 ? 3 : ms <= 60000 ? 2 : 1; }
@@ -500,6 +522,12 @@ async function admin(req, env, p) {
     return redirect("/admin?disconnected=1");
   }
 
+  if (p === "/admin/send-sound" && req.method === "POST") {
+    const people = data.staff.filter((s) => s.chat_id);
+    const res = await Promise.all(people.map((s) => sendAlarmSound(env, s.chat_id, new URL(req.url).origin)));
+    return redirect(`/admin?sound=${res.filter((j) => j.ok).length}`);
+  }
+
   if (p === "/admin/setup-telegram" && req.method === "POST") {
     const base = (env.PUBLIC_URL || new URL(req.url).origin).replace(/\/+$/, "");
     const j = await tg(env, "setWebhook", { url: base + "/tg/hook", secret_token: await hookSecret(env),
@@ -520,11 +548,13 @@ async function admin(req, env, p) {
     : q("test") === "fail" ? `<p class="err"><b>Test alert failed.</b> Is ${esc(q("who"))} connected to Telegram?</p>`
     : q("tg") === "ok" ? `<p class="ok"><b>✓ Telegram bot connected.</b></p>`
     : q("tg") === "fail" ? `<p class="err"><b>Couldn't connect the Telegram bot.</b> Check the bot token.</p>`
-    : q("disconnected") ? `<p class="ok"><b>✓ Disconnected.</b> They have a new connect link now.</p>` : "";
+    : q("disconnected") ? `<p class="ok"><b>✓ Disconnected.</b> They have a new connect link now.</p>`
+    : q("sound") ? `<p class="ok"><b>✓ Alarm sound sent to ${esc(q("sound"))} person(s) on Telegram.</b></p>` : "";
   const botBox = !env.TELEGRAM_TOKEN ? `<div class="box err">Telegram bot token is not set yet.</div>`
     : !bot ? `<div class="box err">Telegram bot token doesn't work. Check it with BotFather.</div>`
     : `<div class="box">Telegram bot: <b>@${esc(bot)}</b> · ${hookOk ? `<span class="ok">✓ connected</span>`
-        : `<span class="err">not connected</span><form method="POST" action="/admin/setup-telegram"><button class="btn2" type="submit">Connect bot</button></form>`}</div>`;
+        : `<span class="err">not connected</span><form method="POST" action="/admin/setup-telegram"><button class="btn2" type="submit">Connect bot</button></form>`}
+       ${hookOk ? `<form method="POST" action="/admin/send-sound"><button class="btn2" type="submit">🔊 Send loud alarm sound to everyone on Telegram</button></form>` : ""}</div>`;
   const dayRows = (s, i) => DAYS.map((d) => {
     const sh = (s.shifts || []).find((x) => normDays(x.days).includes(d)) || {};
     const end = sh.end === "24:00" ? "23:59" : (sh.end || "");
