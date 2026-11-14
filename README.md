@@ -54,37 +54,40 @@ Edit the text between the quotes, then commit and push `store.json`. Anything le
 
 Everything in `store.json` is public. Use work phone numbers and emails, not personal ones.
 
-## Staff alerts: `staff.json`
+## Staff alerts ("Need help? Call a staff member")
 
-The "Need help? Call a staff member" button only appears while someone is on shift. Tapping it sends
-an urgent alert with sound **only to the people scheduled right now**. Nobody is alerted on their days off.
+The button only appears while someone is on shift. When a customer taps it:
+1. Everyone **on shift right now** gets an urgent ntfy alert ("Customer needs help - Aisle 3") with an **Accept** button.
+2. The first person to tap **Accept** gets the job. The alert on everyone else's phone changes to
+   "Shyam is helping the customer at Aisle 3", and their phones stop ringing.
+3. The customer's screen shows "✓ Shyam is on the way".
+4. If nobody accepts, everyone is reminded every 30 seconds. After 3 minutes the customer is asked to go to the counter.
 
-**Each staff member, once:**
+**Points:** 3 for accepting within 30 seconds, 2 within 1 minute, 1 after that.
+
+| Page | Link | Who |
+|---|---|---|
+| Shift editor | https://price-check-help.triveni-waxhaw.workers.dev/admin | Owner only (owner PIN) |
+| Points leaderboard | https://price-check-help.triveni-waxhaw.workers.dev/board | Staff (points PIN) |
+
+**Changing shifts each week:** open the shift editor, enter the owner PIN, and set each person's start and end
+time per day. Leave a day empty for a day off. Tap **Save shifts**; it's live straight away. You can also
+add or remove people, pause someone who's on leave, and send a test alert to check their phone.
+
+**Setting up a staff phone (once per person):**
 1. Install the free **ntfy** app ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) /
    [iPhone](https://apps.apple.com/app/ntfy/id1625396347)) and allow notifications.
-2. Tap **+** (Subscribe to topic) and type their own topic name from `staff.json`, e.g. `triveni-ravi-8f3k2q`.
-3. On Android, also turn on "Instant delivery" for faster alerts.
+2. Tap **+** and type the person's **ntfy code** from the shift editor, e.g. `triveni-shyam-xxxxxxxxxx`.
+3. **Android:** in ntfy Settings, turn on **Keep alerting for highest priority** so the phone keeps ringing
+   until someone accepts. Also turn on **Instant delivery**.
+   **iPhone:** Settings → Notifications → ntfy: allow notifications, sounds and Time Sensitive. On iPhone,
+   tap the alert to open it, then tap **Accept**.
+4. In the shift editor, tap **Send test alert** for that person.
 
-**Schedule format.** Each person has a unique topic and their weekly shifts:
-```json
-{
-  "server": "https://ntfy.sh",
-  "staff": [
-    { "name": "Ravi", "topic": "triveni-ravi-8f3k2q",
-      "shifts": [ { "days": ["Sat", "Sun"], "start": "09:00", "end": "18:00" } ] },
-    { "name": "Priya", "topic": "triveni-priya-x71mzd",
-      "shifts": [ { "days": ["Mon", "Tue", "Wed"], "start": "09:00", "end": "17:00" },
-                  { "days": ["Fri"], "start": "12:00", "end": "21:00" } ] }
-  ]
-}
-```
-- `days` can also be `"Weekend"`, `"Weekdays"` or `"Daily"`. A shift like `22:00` to `06:00` runs overnight.
-- To pause someone (leave, holiday), add `"active": false` to their entry.
-- After editing, commit and push `staff.json`. The change is live in about a minute.
+The staff list, shifts and ntfy codes are private. They live in the help service's database, not on this public site.
 
-`staff.json` is public, so anyone could read the schedule or the topic names. Make topic names hard to
-guess, and change a topic if a staff member leaves. The button also has a 1-minute cooldown, so a
-customer can't spam alerts.
+**The help service** is the `worker/` folder, running free on Cloudflare (account skoppal@gitam.in).
+To update its code: `cd worker`, then `npx wrangler deploy`.
 
 ## Other files
 

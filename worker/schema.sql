@@ -16,3 +16,8 @@ CREATE TABLE IF NOT EXISTS requests (
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests (status);
 CREATE INDEX IF NOT EXISTS idx_requests_ip_time ON requests (ip, created_at);
 CREATE INDEX IF NOT EXISTS idx_requests_accepted ON requests (accepted_at);
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER
+);

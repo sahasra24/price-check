@@ -3,15 +3,15 @@ main = "src/index.js"
 compatibility_date = "2025-10-01"
 
 [vars]
-TIMEZONE = "America/Toronto"
+TIMEZONE = "America/New_York"
 ALLOWED_ORIGINS = "https://sahasra24.github.io,http://127.0.0.1:8765,http://localhost:8000"
 NTFY_SERVER = "https://ntfy.sh"
-PUBLIC_URL = ""
+PUBLIC_URL = "https://price-check-help.triveni-waxhaw.workers.dev"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "price-check-help"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "a51dc7e6-a0ab-4e12-a3f2-ac769736496c"
 
 [triggers]
 crons = ["* * * * *"]

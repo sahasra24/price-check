@@ -6,7 +6,8 @@
 // expire after 3 minutes.
 //
 // Secrets / vars (set with wrangler, never committed):
-//   STAFF_JSON   private staff list + weekly shifts + ntfy topics (see staff.example.json)
+//   ADMIN_PIN    PIN for the shift editor page (/admin)
+//   STAFF_JSON   optional fallback staff list; normally the list lives in the database (edited at /admin)
 //   SIGNING_KEY  random string used to sign Accept links
 //   BOARD_PIN    PIN for the points leaderboard page
 //   TIMEZONE     store time zone, e.g. America/Toronto        (wrangler.toml [vars])
@@ -32,6 +33,7 @@ export default {
       if ((m = p.match(/^\/api\/help\/([a-z0-9]{12})$/)) && req.method === "GET") return json(await helpState(m[1], env, ctx, url.origin), cors);
       if ((m = p.match(/^\/a\/([a-z0-9]{12})\/([a-z0-9-]{1,40})\/([a-f0-9]{32})$/))) return accept(req, env, ctx, m[1], m[2], m[3]);
       if (p === "/board") return board(req, env);
+      if (p === "/admin" || p.startsWith("/admin/")) return admin(req, env, p);
       if (p === "/") return new Response("Price Check staff-help service is running.", { headers: { "content-type": "text/plain" } });
       return json({ error: "not found" }, cors, 404);
     } catch (e) {
@@ -85,11 +87,19 @@ function sameString(a, b) {
 }
 
 // ---------- staff + shifts ----------
-function staffList(env) {
+async function loadStaffData(env) {
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'staff'").first();
   let data;
-  try { data = JSON.parse(env.STAFF_JSON || "{}"); } catch { data = {}; }
-  return (data.staff || []).filter((s) => s && s.name && s.topic && s.active !== false)
+  try { data = JSON.parse(row ? row.value : (env.STAFF_JSON || "{}")); } catch { data = {}; }
+  return { staff: Array.isArray(data.staff) ? data.staff : [] };
+}
+async function staffList(env) {
+  const data = await loadStaffData(env);
+  return data.staff.filter((s) => s && s.name && s.topic && s.active !== false)
     .map((s) => ({ ...s, key: slug(s.name) }));
+}
+function isOnShift(s, now) {
+  return (s.shifts || []).some((sh) => inWindow(normDays(sh.days), sh.start, sh.end, now));
 }
 function storeNow(env, date = new Date()) {
   const opts = { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23" };
@@ -133,9 +143,9 @@ function inWindow(days, start, end, now) {
   const prev = DAYS[(DAYS.indexOf(now.dow) + 6) % 7];
   return (has(now.dow) && now.mins >= s) || (has(prev) && now.mins < e);
 }
-function onShift(env) {
+async function onShift(env) {
   const now = storeNow(env);
-  return staffList(env).filter((s) => (s.shifts || []).some((sh) => inWindow(normDays(sh.days), sh.start, sh.end, now)));
+  return (await staffList(env)).filter((s) => isOnShift(s, now));
 }
 
 // ---------- ntfy ----------
@@ -177,12 +187,12 @@ async function notifyOthers(r, env, winnerKey, text) {
 
 // ---------- requests ----------
 async function status(env) {
-  const n = onShift(env).length;
+  const n = (await onShift(env)).length;
   return { available: n > 0, on_shift: n };
 }
 
 async function createHelp(req, env, ctx) {
-  const people = onShift(env);
+  const people = await onShift(env);
   if (!people.length) return [{ error: "no_staff", message: "No staff member is on shift right now." }, 409];
 
   const ip = req.headers.get("CF-Connecting-IP") || "local";
@@ -341,4 +351,135 @@ async function board(req, env) {
 <h2>This week</h2>${table(week)}<h2>This month</h2>${table(month)}<h2>All time</h2>${table(all)}
 <h2>Recent requests</h2>${recent.length ? `<table>${recentRows}</table>` : `<p class="muted">None yet.</p>`}
 </div></main></body></html>`);
+}
+
+// ---------- shift editor (/admin) ----------
+const ADMIN_SESSION_MS = 12 * 60 * 60 * 1000;
+const DAY_LABEL = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
+
+async function adminCookie(env) {
+  const exp = Date.now() + ADMIN_SESSION_MS;
+  return `${exp}.${await sign(env, "admin:" + exp + ":" + env.ADMIN_PIN)}`;
+}
+async function isAdmin(req, env) {
+  const c = (req.headers.get("Cookie") || "").match(/(?:^|;\s*)pc_admin=([0-9]+)\.([a-f0-9]{32})/);
+  if (!c || Number(c[1]) < Date.now()) return false;
+  return sameString(c[2], await sign(env, "admin:" + c[1] + ":" + env.ADMIN_PIN));
+}
+function page(title, body) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark"><meta name="robots" content="noindex"><title>${esc(title)}</title><style>${PAGE_CSS}
+.person{border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:14px}
+.person h3{margin:0 0 6px;font-size:18px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.day{display:grid;grid-template-columns:88px minmax(0,1fr) minmax(0,1fr);gap:6px;align-items:center;margin-top:6px}
+.day input{min-height:42px;padding:6px 6px;font-size:16px;width:100%;min-width:0}
+input[type=checkbox]{width:22px;height:22px;min-height:22px;padding:0;flex:0 0 auto}
+.tag{font-size:13px;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--line)}
+.tag.on{background:var(--ok);color:var(--card)}
+.code{font-family:ui-monospace,Consolas,monospace;font-size:15px;user-select:all;word-break:break-all}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:15px}
+.row label{display:flex;gap:6px;align-items:center}
+.small{font-size:14px}
+.btn2{display:inline-block;width:auto;min-height:40px;margin:8px 0 0;padding:6px 14px;font-size:15px;background:var(--line);color:var(--text)}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:center}
+a{color:var(--accent)}
+</style></head><body><main><div class="card">${body}</div></main></body></html>`;
+}
+
+async function admin(req, env, p) {
+  if (!env.ADMIN_PIN) return html(page("Shift editor", "<h1>Shift editor</h1><p>Admin PIN is not set.</p>"), 503);
+  if (p === "/admin/login" && req.method === "POST") {
+    const f = await req.formData();
+    if (sameString(String(f.get("pin") || ""), String(env.ADMIN_PIN))) {
+      return new Response(null, { status: 303, headers: { Location: "/admin",
+        "Set-Cookie": `pc_admin=${await adminCookie(env)}; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=${ADMIN_SESSION_MS / 1000}` } });
+    }
+    return html(loginPage(true), 403);
+  }
+  if (p === "/admin/logout") {
+    return new Response(null, { status: 303, headers: { Location: "/admin",
+      "Set-Cookie": "pc_admin=; Path=/admin; Max-Age=0; HttpOnly; Secure; SameSite=Strict" } });
+  }
+  if (!(await isAdmin(req, env))) return html(loginPage(false));
+
+  const data = await loadStaffData(env);
+
+  if (p === "/admin/save" && req.method === "POST") {
+    const f = await req.formData();
+    const n = Number(f.get("count") || 0);
+    const out = [];
+    const used = new Set();
+    for (let i = 0; i <= n; i++) {                       // row n is the "add a person" row
+      const name = clean(f.get(`name_${i}`), 40);
+      if (!name || f.get(`remove_${i}`) || used.has(slug(name))) continue;
+      used.add(slug(name));
+      const orig = String(f.get(`orig_${i}`) || name);
+      const prev = data.staff.find((s) => slug(s.name) === slug(orig));
+      const shifts = [];
+      for (const d of DAYS) {
+        const st = String(f.get(`${d}_s_${i}`) || ""), en = String(f.get(`${d}_e_${i}`) || "");
+        if (toMins(st) != null && toMins(en) != null && st !== en) shifts.push({ days: [d], start: st, end: en });
+      }
+      out.push({ name, topic: (prev && prev.topic) || `triveni-${slug(name)}-${rid().slice(0, 10)}`,
+                 active: !f.get(`paused_${i}`), shifts });
+    }
+    await env.DB.prepare(`INSERT INTO settings (key, value, updated_at) VALUES ('staff', ?, ?)
+                          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+      .bind(JSON.stringify({ staff: out }), Date.now()).run();
+    return new Response(null, { status: 303, headers: { Location: "/admin?saved=1" } });
+  }
+
+  if (p === "/admin/test" && req.method === "POST") {
+    const f = await req.formData();
+    const person = data.staff.find((s) => slug(s.name) === String(f.get("key") || ""));
+    let ok = false;
+    if (person) ok = await ntfy(env, person.topic, "test-" + rid(), { title: "Test alert",
+      message: `Hi ${person.name}, staff alerts are working on this phone.`, priority: 5, tags: "bell" });
+    return new Response(null, { status: 303, headers: { Location: `/admin?test=${ok ? "ok" : "fail"}&who=${encodeURIComponent(person ? person.name : "")}` } });
+  }
+
+  // ----- editor page -----
+  const url = new URL(req.url);
+  const now = storeNow(env);
+  const msg = url.searchParams.get("saved") ? `<p class="ok"><b>✓ Saved.</b> Changes are live now.</p>`
+    : url.searchParams.get("test") === "ok" ? `<p class="ok"><b>✓ Test alert sent to ${esc(url.searchParams.get("who"))}.</b></p>`
+    : url.searchParams.get("test") === "fail" ? `<p class="err"><b>Test alert failed.</b></p>` : "";
+  const dayRows = (s, i) => DAYS.map((d) => {
+    const sh = (s.shifts || []).find((x) => normDays(x.days).includes(d)) || {};
+    const end = sh.end === "24:00" ? "23:59" : (sh.end || "");
+    return `<div class="day"><span>${DAY_LABEL[d]}${d === now.dow ? " •" : ""}</span>
+      <input type="time" name="${d}_s_${i}" value="${esc(sh.start || "")}" aria-label="${DAY_LABEL[d]} start">
+      <input type="time" name="${d}_e_${i}" value="${esc(end)}" aria-label="${DAY_LABEL[d]} end"></div>`;
+  }).join("");
+  const people = data.staff.map((s, i) => {
+    const on = s.active !== false && isOnShift(s, now);
+    const label = s.active === false ? "Paused" : on ? "On shift now" : "Off now";
+    return `<div class="person"><h3><span>${esc(s.name)}</span><span class="tag ${on ? "on" : ""}">${label}</span></h3>
+      <input type="hidden" name="orig_${i}" value="${esc(s.name)}">
+      <div class="row"><label>Name <input name="name_${i}" value="${esc(s.name)}" style="min-height:40px;width:160px"></label></div>
+      <div class="row small">ntfy code: <span class="code">${esc(s.topic)}</span></div>
+      ${dayRows(s, i)}
+      <div class="row"><label><input type="checkbox" name="paused_${i}" ${s.active === false ? "checked" : ""}> Pause alerts (holiday/leave)</label>
+      <label><input type="checkbox" name="remove_${i}"> Remove person</label></div>
+      <button class="btn2" type="submit" form="test_${slug(s.name)}">🔔 Send test alert</button></div>`;
+  }).join("");
+  const n = data.staff.length;
+  const tests = data.staff.map((s) => `<form id="test_${slug(s.name)}" method="POST" action="/admin/test"><input type="hidden" name="key" value="${slug(s.name)}"></form>`).join("");
+  const clock = `${String(now.h).padStart(2, "0")}:${String(now.mi).padStart(2, "0")}`;
+  return html(page("Shift editor", `<div class="top"><h1>🗓️ Staff shifts</h1><a class="small" href="/admin/logout">Log out</a></div>
+<p class="muted small">Enter each person's start and end time for each day. Leave a day empty for a day off (no alerts that day).
+Store time now: ${DAY_LABEL[now.dow]} ${clock}.</p>
+${msg}<form method="POST" action="/admin/save"><input type="hidden" name="count" value="${n}">
+${people || `<p class="muted">No staff yet. Add the first person below.</p>`}
+<div class="person"><h3>➕ Add a person</h3><div class="row"><label>Name <input name="name_${n}" placeholder="e.g. Shyam" style="min-height:40px;width:160px"></label></div>
+${dayRows({}, n)}</div>
+<button type="submit">💾 Save shifts</button></form>${tests}
+<p class="small"><a href="/board">🏆 Staff points</a></p>`));
+}
+
+function loginPage(bad) {
+  return page("Shift editor", `<h1>🗓️ Staff shifts</h1>${bad ? `<p class="err">Wrong PIN.</p>` : ""}
+<form method="POST" action="/admin/login"><label for="pin" class="muted">Owner PIN</label>
+<input id="pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" autofocus>
+<button type="submit">Open</button></form>`);
 }

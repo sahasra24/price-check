@@ -2,8 +2,8 @@
   "name": "",
   "address": "",
   "map_url": "",
-  "timezone": "America/Toronto",
-  "help_api": "",
+  "timezone": "America/New_York",
+  "help_api": "https://price-check-help.triveni-waxhaw.workers.dev",
   "hours": {
     "Mon": "",
     "Tue": "",
