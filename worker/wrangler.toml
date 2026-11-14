@@ -5,7 +5,7 @@ compatibility_date = "2025-10-01"
 [vars]
 TIMEZONE = "America/New_York"
 ALLOWED_ORIGINS = "https://sahasra24.github.io,http://127.0.0.1:8765,http://localhost:8000"
-NTFY_SERVER = "https://ntfy.sh"
+
 PUBLIC_URL = "https://price-check-help.triveni-waxhaw.workers.dev"
 
 [[d1_databases]]

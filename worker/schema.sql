@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS requests (
   where_txt     TEXT,
   item          TEXT,
   status        TEXT NOT NULL,          -- open | accepted | expired | failed
-  staff_json    TEXT NOT NULL,          -- who was alerted (name, key, topic)
+  staff_json    TEXT NOT NULL,          -- who was alerted (key, name, chat_id)
+  msgs_json     TEXT,                   -- Telegram message id per person
   accepted_by   TEXT,
   accepted_name TEXT,
   accepted_at   INTEGER,
