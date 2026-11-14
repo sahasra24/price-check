@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#4f46e5">
   <title>Price Check</title>
-  <link rel="stylesheet" href="style.css?v=5">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
   <header class="hero">
@@ -38,8 +38,11 @@
     <!-- Live camera -->
     <section id="camWrap" class="card cam" hidden>
       <div id="reader"></div>
-      <p class="hint">Hold the barcode flat, about 4–6 in (10–15 cm) from the camera, in good light</p>
-      <button id="stopBtn" class="btn ghost" type="button">Cancel</button>
+      <p class="hint">It scans by itself. Hold the barcode flat, 4–6 in (10–15 cm) away, in good light. Not working? Tap <b>Capture</b>.</p>
+      <div class="row2">
+        <button id="snapBtn" class="btn primary" type="button">📸 Capture</button>
+        <button id="stopBtn" class="btn ghost" type="button">Cancel</button>
+      </div>
     </section>
 
     <!-- Ways to look up a price -->
@@ -92,12 +95,9 @@
       </div>
     </section>
 
-    <div id="fileReader" hidden></div>
-
     <footer class="foot">Final price confirmed at checkout.</footer>
   </main>
 
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

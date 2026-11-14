@@ -209,7 +209,19 @@ h1 { font-size: 30px; margin: 0 0 4px; letter-spacing: -.02em; line-height: 1.15
 
 /* ---------- Camera ---------- */
 .cam { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-#reader { width: 100%; border-radius: 16px; overflow: hidden; background: #000; }
+#reader { width: 100%; border-radius: 16px; overflow: hidden; background: #000; position: relative; min-height: 200px; }
+.scan-box {
+  position: absolute; left: 5%; right: 5%; top: 20%; bottom: 20%;
+  border: 3px solid rgba(255, 255, 255, .9); border-radius: 14px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .35);
+  pointer-events: none;
+}
+.scan-box::after {
+  content: ""; position: absolute; left: 6%; right: 6%; top: 50%; height: 2px;
+  background: #ef4444; box-shadow: 0 0 8px #ef4444; animation: sweep 1.8s ease-in-out infinite;
+}
+@keyframes sweep { 0%, 100% { transform: translateY(-38px); } 50% { transform: translateY(38px); } }
+@media (prefers-reduced-motion: reduce) { .scan-box::after { animation: none; } }
 #reader video { width: 100% !important; height: auto !important; display: block; }
 .hint { text-align: center; margin: 0; color: var(--muted); }
 

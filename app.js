@@ -4,7 +4,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var els = {
     storeName: $("storeName"), sub: $("sub"), openStatus: $("openStatus"),
-    scanBtn: $("scanBtn"), camWrap: $("camWrap"), stopBtn: $("stopBtn"),
+    scanBtn: $("scanBtn"), camWrap: $("camWrap"), reader: $("reader"), stopBtn: $("stopBtn"), snapBtn: $("snapBtn"),
     result: $("result"), found: $("found"), notFound: $("notFound"),
     saleBadge: $("saleBadge"), pName: $("pName"), pWas: $("pWas"), pWasPrice: $("pWasPrice"),
     pPrice: $("pPrice"), pSave: $("pSave"), pSaleNote: $("pSaleNote"), pCode: $("pCode"),
@@ -27,7 +27,6 @@
   var helpReq = null;         // id of the customer's current help request
   var helpPoll = null;
   var loaded = null;          // promise for the product list
-  var scanner = null;
   var scanning = false;
   var handled = false;
   var lastItem = null;        // {name, barcode} of the last lookup, sent along with a help request
@@ -426,102 +425,178 @@
     updateHelpButton();
   }
 
-  // ---------- Camera scanning ----------
-  function formats() {
-    var F = window.Html5QrcodeSupportedFormats;
-    return F ? [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.QR_CODE] : undefined;
+  // ---------- Barcode reading ----------
+  // Uses zxing-cpp (WebAssembly), which reads real product barcodes on coloured, shiny, tilted wrappers
+  // far better than the old JavaScript reader. The phone's built-in BarcodeDetector is tried first when present.
+  var ZXING_URL = "https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.5/dist/es/reader/index.js";
+  var ZX_FORMATS = ["EAN13", "EAN8", "UPCA", "UPCE", "Code128", "Code39", "QRCode"];
+  var NATIVE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"];
+  var zxingPromise = null;
+  var nativeDetector = null;
+
+  function loadZxing() {
+    if (!zxingPromise) {
+      zxingPromise = import(ZXING_URL).then(function (m) { return m; })
+        .catch(function (e) { zxingPromise = null; throw e; });
+    }
+    return zxingPromise;
   }
 
-  function newScanner(id) {
-    return new Html5Qrcode(id, {
-      formatsToSupport: formats(),
-      experimentalFeatures: { useBarCodeDetectorIfSupported: true }, // native BarcodeDetector when available
-      verbose: false
+  async function getNativeDetector() {
+    if (nativeDetector !== null) return nativeDetector;
+    nativeDetector = false;
+    try {
+      if ("BarcodeDetector" in window) {
+        var supported = await window.BarcodeDetector.getSupportedFormats();
+        var use = NATIVE_FORMATS.filter(function (f) { return supported.indexOf(f) !== -1; });
+        if (use.length) nativeDetector = new window.BarcodeDetector({ formats: use });
+      }
+    } catch (e) { nativeDetector = false; }
+    return nativeDetector;
+  }
+
+  // Read one image (ImageData, Blob/File or canvas). tryHarder = slower but more thorough (photos, Capture).
+  async function readCode(input, tryHarder) {
+    var det = await getNativeDetector();
+    if (det && !(input instanceof Blob)) {
+      try {
+        var found = await det.detect(input instanceof ImageData ? await createImageBitmap(input) : input);
+        if (found && found.length) return found[0].rawValue;
+      } catch (e) { /* fall through to zxing */ }
+    }
+    var zx = await loadZxing();
+    var res = await zx.readBarcodes(input, {
+      formats: ZX_FORMATS, tryHarder: !!tryHarder, tryRotate: true, tryInvert: false,
+      tryDownscale: true, maxNumberOfSymbols: 1
     });
+    return res && res.length && res[0].isValid !== false && res[0].text ? res[0].text : null;
   }
 
-  function startCamera() {
-    if (!window.Html5Qrcode) { showMsg("Scanner didn't load. Use 'Take a photo' or type the number below."); return; }
+  // ---------- Live camera ----------
+  var stream = null, video = null, loopTimer = null, frameCanvas = null, busy = false;
+
+  async function startCamera() {
     clearResult();
     showMsg("");
     els.scanBtn.hidden = true;
     els.camWrap.hidden = false;
     handled = false;
-    if (!scanner) scanner = newScanner("reader");
-
-    var onScan = function (text) {
-      if (handled) return;
-      handled = true;
-      buzz();
-      stopCamera().then(function () { lookup(text); });
-    };
-    var config = {
-      fps: 15,
-      disableFlip: true,
-      // Wide, short box shaped like a product barcode.
-      qrbox: function (w, h) {
-        var bw = Math.floor(w * 0.92), bh = Math.floor(Math.min(h * 0.5, bw * 0.45));
-        return { width: Math.max(bw, 80), height: Math.max(bh, 60) };
-      },
-      // Ask for a sharp HD picture with autofocus: small barcodes on wrappers need the detail.
-      videoConstraints: {
-        facingMode: "environment",
-        width: { ideal: 1920 }, height: { ideal: 1080 },
-        advanced: [{ focusMode: "continuous" }]
-      }
-    };
-    var noFrame = function () { /* no code in this frame */ };
-
-    scanner.start({ facingMode: "environment" }, config, onScan, noFrame)
-      .catch(function () {                       // some phones reject the HD request: fall back to the basic camera
-        delete config.videoConstraints;
-        return scanner.start({ facingMode: "environment" }, config, onScan, noFrame);
-      })
-      .then(function () {
-        scanning = true;
-        zoomIn();
-      }).catch(function (err) {
-      console.error(err);
+    loadZxing().catch(function () {});
+    var tries = [
+      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: "continuous" }] }, audio: false },
+      { video: { facingMode: { ideal: "environment" } }, audio: false },
+      { video: true, audio: false }
+    ];
+    for (var i = 0; i < tries.length && !stream; i++) {
+      try { stream = await navigator.mediaDevices.getUserMedia(tries[i]); } catch (e) { stream = null; }
+    }
+    if (!stream) {
       els.camWrap.hidden = true;
       els.scanBtn.hidden = false;
       showMsg("Camera not available. Allow camera access, or use 'Take a photo' / type the number below.");
-    });
+      return;
+    }
+    if (!video) {
+      els.reader.textContent = "";
+      video = document.createElement("video");
+      video.setAttribute("playsinline", ""); video.muted = true; video.autoplay = true;
+      var box = document.createElement("div"); box.className = "scan-box";
+      els.reader.appendChild(video); els.reader.appendChild(box);
+    }
+    video.srcObject = stream;
+    try { await video.play(); } catch (e) {}
+    scanning = true;
+    zoomIn();
+    scanLoop();
   }
 
   // A little zoom lets the phone focus on a small barcode without holding it too close.
   function zoomIn() {
     try {
-      var caps = scanner.getRunningTrackCapabilities && scanner.getRunningTrackCapabilities();
-      if (caps && caps.zoom && caps.zoom.max >= 1.5) {
-        scanner.applyVideoConstraints({ advanced: [{ zoom: Math.min(2, caps.zoom.max) }] }).catch(function () {});
-      }
-    } catch (e) { /* zoom not supported: fine */ }
+      var track = stream.getVideoTracks()[0];
+      var caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.zoom && caps.zoom.max >= 1.5) track.applyConstraints({ advanced: [{ zoom: Math.min(2, caps.zoom.max) }] }).catch(function () {});
+    } catch (e) {}
+  }
+
+  // Grab the middle band of the picture (where the box is) and look for a barcode, ~6 times a second.
+  function grab(full) {
+    var vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return null;
+    var cw = full ? vw : Math.round(vw * 0.9), ch = full ? vh : Math.round(vh * 0.6);
+    var scale = Math.min(1, (full ? 1920 : 1280) / cw);
+    if (!frameCanvas) frameCanvas = document.createElement("canvas");
+    frameCanvas.width = Math.round(cw * scale); frameCanvas.height = Math.round(ch * scale);
+    var g = frameCanvas.getContext("2d", { willReadFrequently: true });
+    g.drawImage(video, (vw - cw) / 2, (vh - ch) / 2, cw, ch, 0, 0, frameCanvas.width, frameCanvas.height);
+    return g.getImageData(0, 0, frameCanvas.width, frameCanvas.height);
+  }
+
+  async function scanLoop() {
+    if (!scanning || handled) return;
+    if (!busy) {
+      busy = true;
+      try {
+        var img = grab(false);
+        var text = img ? await readCode(img, false) : null;
+        if (text) return found(text);
+      } catch (e) { /* reader still loading or frame not ready */ }
+      busy = false;
+    }
+    loopTimer = setTimeout(scanLoop, 160);
+  }
+
+  async function found(text) {
+    if (handled) return;
+    handled = true;
+    busy = false;
+    buzz();
+    await stopCamera();
+    lookup(text);
   }
 
   function stopCamera() {
-    var done = function () { scanning = false; els.camWrap.hidden = true; };
-    if (scanner && scanning) {
-      return scanner.stop().then(done, done);
-    }
-    done();
+    clearTimeout(loopTimer);
+    scanning = false;
+    busy = false;
+    if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    if (video) video.srcObject = null;
+    els.camWrap.hidden = true;
     return Promise.resolve();
   }
 
-  // ---------- Photo fallback ----------
-  var fileScanner = null;
-  function scanPhoto(file) {
+  // Manual capture: read the whole current frame, thoroughly.
+  async function captureFrame() {
+    if (!scanning || !video) return;
+    els.snapBtn.disabled = true;
+    els.snapBtn.textContent = "Reading…";
+    showMsg("");
+    try {
+      var text = await readCode(grab(true), true);
+      if (text) await found(text);
+      else showMsg("Couldn't read it. Hold steady, fill the box with the barcode, and tap Capture again.");
+    } catch (e) {
+      showMsg("Couldn't read it. Hold steady, fill the box with the barcode, and tap Capture again.");
+    }
+    els.snapBtn.disabled = false;
+    els.snapBtn.textContent = "📸 Capture";
+  }
+
+  // ---------- Photo ----------
+  async function scanPhoto(file) {
     if (!file) return;
-    if (!window.Html5Qrcode) { showMsg("Scanner didn't load. Please type the number below."); return; }
     showMsg("Reading photo…");
-    stopCamera().then(function () {
-      if (!fileScanner) fileScanner = newScanner("fileReader");
-      return fileScanner.scanFile(file, false);
-    }).then(function (text) {
+    try {
+      await stopCamera();
+      var text = await readCode(file, true);
+      if (!text) throw new Error("not found");
+      showMsg("");
       buzz();
       lookup(text);
-    }).catch(function () {
-      showMsg("Couldn't read a barcode in that photo. Try again closer, or type the number below.");
-    }).then(function () { els.photoInput.value = ""; });
+    } catch (e) {
+      showMsg("Couldn't read the barcode in that photo. Take it straight on, in good light, with the barcode in the middle — or type the number below.");
+    }
+    els.photoInput.value = "";
   }
 
   // ---------- Wire up ----------
@@ -532,6 +607,7 @@
   });
   els.clearBtn.addEventListener("click", clearResult);
   els.photoInput.addEventListener("change", function () { scanPhoto(els.photoInput.files[0]); });
+  els.snapBtn.addEventListener("click", captureFrame);
   els.typeForm.addEventListener("submit", function (e) {
     e.preventDefault();
     var v = els.codeInput.value.trim();
