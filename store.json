@@ -1,0 +1,18 @@
+{
+  "name": "",
+  "address": "",
+  "map_url": "",
+  "timezone": "America/Toronto",
+  "hours": {
+    "Mon": "",
+    "Tue": "",
+    "Wed": "",
+    "Thu": "",
+    "Fri": "",
+    "Sat": "",
+    "Sun": ""
+  },
+  "help_desk": { "phone": "", "email": "" },
+  "manager": { "name": "", "phone": "", "email": "" },
+  "notes": ""
+}

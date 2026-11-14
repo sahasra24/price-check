@@ -12,16 +12,21 @@
 <body>
   <main class="wrap">
     <header class="top">
-      <h1>Price Check</h1>
-      <p class="sub">Scan any item's barcode to see its price.</p>
+      <h1 id="storeName">Price Check</h1>
+      <p id="sub" class="sub">Scan any item's barcode to see its price.</p>
+      <p id="openStatus" class="open-status" hidden></p>
     </header>
 
     <!-- Result card (hidden until a scan) -->
     <section id="result" class="card result" hidden aria-live="polite">
       <button id="clearBtn" class="clear" type="button" aria-label="Clear result">✕ Clear</button>
       <div id="found">
+        <p id="saleBadge" class="badge" hidden>SALE</p>
         <p id="pName" class="name"></p>
+        <p id="pWas" class="was" hidden>Regular price <s id="pWasPrice"></s></p>
         <p id="pPrice" class="price"></p>
+        <p id="pSave" class="save" hidden></p>
+        <p id="pSaleNote" class="sale-note" hidden></p>
       </div>
       <p id="notFound" class="notfound" hidden>Price not available — please ask a staff member.</p>
       <p class="code">Barcode: <span id="pCode"></span></p>
@@ -41,6 +46,23 @@
 
     <p id="msg" class="msg" role="status"></p>
 
+    <!-- Call staff (only shown while someone is on shift) -->
+    <button id="helpBtn" class="btn help-btn" type="button" hidden>
+      <span aria-hidden="true">🙋</span> Need help? Call a staff member
+    </button>
+    <section id="helpPanel" class="card help" hidden aria-live="polite">
+      <h2>Call a staff member</h2>
+      <form id="helpForm" autocomplete="off">
+        <label for="whereInput">Where are you? (optional)</label>
+        <input id="whereInput" type="text" maxlength="80" placeholder="e.g. Aisle 4, near the fridges">
+        <div class="row2">
+          <button id="sendHelp" class="btn primary" type="submit">Send alert</button>
+          <button id="cancelHelp" class="btn ghost" type="button">Cancel</button>
+        </div>
+      </form>
+      <p id="helpStatus" class="help-status"></p>
+    </section>
+
     <div class="alt">
       <label class="btn secondary" for="photoInput">Take a photo instead</label>
       <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
@@ -53,6 +75,12 @@
         </div>
       </form>
     </div>
+
+    <!-- Store details (hidden until store.json has something in it) -->
+    <details id="storeInfo" class="card info" hidden>
+      <summary>Store info, hours &amp; contact</summary>
+      <div id="infoBody"></div>
+    </details>
 
     <div id="fileReader" hidden></div>
 
