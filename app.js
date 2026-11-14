@@ -449,30 +449,53 @@
     handled = false;
     if (!scanner) scanner = newScanner("reader");
 
-    scanner.start(
-      { facingMode: "environment" },
-      {
-        fps: 12,
-        qrbox: function (w, h) {
-          var bw = Math.floor(w * 0.9), bh = Math.floor(Math.min(h * 0.6, bw * 0.6));
-          return { width: Math.max(bw, 50), height: Math.max(bh, 50) };
-        }
+    var onScan = function (text) {
+      if (handled) return;
+      handled = true;
+      buzz();
+      stopCamera().then(function () { lookup(text); });
+    };
+    var config = {
+      fps: 15,
+      disableFlip: true,
+      // Wide, short box shaped like a product barcode.
+      qrbox: function (w, h) {
+        var bw = Math.floor(w * 0.92), bh = Math.floor(Math.min(h * 0.5, bw * 0.45));
+        return { width: Math.max(bw, 80), height: Math.max(bh, 60) };
       },
-      function onScan(text) {
-        if (handled) return;
-        handled = true;
-        buzz();
-        stopCamera().then(function () { lookup(text); });
-      },
-      function () { /* no code in this frame */ }
-    ).then(function () {
-      scanning = true;
-    }).catch(function (err) {
+      // Ask for a sharp HD picture with autofocus: small barcodes on wrappers need the detail.
+      videoConstraints: {
+        facingMode: "environment",
+        width: { ideal: 1920 }, height: { ideal: 1080 },
+        advanced: [{ focusMode: "continuous" }]
+      }
+    };
+    var noFrame = function () { /* no code in this frame */ };
+
+    scanner.start({ facingMode: "environment" }, config, onScan, noFrame)
+      .catch(function () {                       // some phones reject the HD request: fall back to the basic camera
+        delete config.videoConstraints;
+        return scanner.start({ facingMode: "environment" }, config, onScan, noFrame);
+      })
+      .then(function () {
+        scanning = true;
+        zoomIn();
+      }).catch(function (err) {
       console.error(err);
       els.camWrap.hidden = true;
       els.scanBtn.hidden = false;
       showMsg("Camera not available. Allow camera access, or use 'Take a photo' / type the number below.");
     });
+  }
+
+  // A little zoom lets the phone focus on a small barcode without holding it too close.
+  function zoomIn() {
+    try {
+      var caps = scanner.getRunningTrackCapabilities && scanner.getRunningTrackCapabilities();
+      if (caps && caps.zoom && caps.zoom.max >= 1.5) {
+        scanner.applyVideoConstraints({ advanced: [{ zoom: Math.min(2, caps.zoom.max) }] }).catch(function () {});
+      }
+    } catch (e) { /* zoom not supported: fine */ }
   }
 
   function stopCamera() {
