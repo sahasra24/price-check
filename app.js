@@ -19,11 +19,13 @@
 
   var DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   var DAY_NAMES = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
-  var HELP_COOLDOWN_MS = 60 * 1000;
 
   var products = new Map();   // normalized barcode -> product
   var store = {};             // store.json
-  var staff = { staff: [] };  // staff.json
+  var helpApi = "";           // staff-help service URL (store.json "help_api")
+  var helpAvailable = false;  // is anyone on shift right now?
+  var helpReq = null;         // id of the customer's current help request
+  var helpPoll = null;
   var loaded = null;          // promise for the product list
   var scanner = null;
   var scanning = false;
@@ -35,8 +37,6 @@
     return fetch(name + "?v=" + Date.now(), { cache: "no-store" })
       .then(function (r) { if (!r.ok) throw new Error(name + ": HTTP " + r.status); return r.json(); });
   }
-  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
-  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
   function txt(v) { return v == null ? "" : String(v).trim(); }
 
   // Current date/time in the STORE's time zone (so sales and shifts follow store time).
@@ -148,9 +148,13 @@
 
   function loadConfig() {
     return Promise.all([
-      fetchJSON("store.json").then(function (s) { store = s || {}; }, function () { store = {}; }),
-      fetchJSON("staff.json").then(function (s) { staff = s || { staff: [] }; }, function () { staff = { staff: [] }; })
-    ]).then(function () { renderStore(); refreshTimed(); });
+      fetchJSON("store.json").then(function (s) { store = s || {}; }, function () { store = {}; })
+    ]).then(function () {
+      helpApi = txt(store.help_api).replace(/\/+$/, "");
+      renderStore();
+      refreshTimed();
+      checkHelpAvailable();
+    });
   }
 
   function find(code) {
@@ -327,26 +331,26 @@
   }
 
   // ---------- Call staff ----------
-  function onShift(now) {
-    return (staff.staff || []).filter(function (s) {
-      return s && txt(s.topic) && s.active !== false && (s.shifts || []).some(function (sh) {
-        return inWindow(normDays(sh.days), sh.start, sh.end, now);
-      });
+  // The staff list and shifts are private on the help service; the page only asks "is anyone on shift?"
+  function api(path, opts) {
+    return fetch(helpApi + path, opts).then(function (r) {
+      return r.json().then(function (j) { j._status = r.status; return j; }, function () { return { _status: r.status }; });
     });
   }
 
-  function cooldownLeft() {
-    var t = Number(lsGet("pc_help_sent") || 0);
-    return Math.max(0, t + HELP_COOLDOWN_MS - Date.now());
+  function checkHelpAvailable() {
+    if (!helpApi) { helpAvailable = false; updateHelpButton(); return; }
+    api("/api/status", { cache: "no-store" }).then(function (j) {
+      helpAvailable = !!j.available; updateHelpButton();
+    }, function () { helpAvailable = false; updateHelpButton(); });
   }
 
-  function refreshTimed() {
-    var now = storeNow();
-    renderOpenStatus(now);
-    var anyone = onShift(now).length > 0;
-    els.helpBtn.hidden = !anyone;
-    if (!anyone && !els.helpPanel.hidden && !els.helpStatus.classList.contains("ok")) els.helpPanel.hidden = true;
+  function updateHelpButton() {
+    els.helpBtn.hidden = !(helpAvailable || helpReq);
+    if (!helpAvailable && !helpReq && !els.helpPanel.hidden && !els.helpStatus.classList.contains("ok")) els.helpPanel.hidden = true;
   }
+
+  function refreshTimed() { renderOpenStatus(storeNow()); }
 
   function setHelpStatus(kind, text, phone) {
     els.helpStatus.className = "help-status " + (kind || "");
@@ -359,9 +363,8 @@
 
   function openHelp() {
     els.helpPanel.hidden = false;
-    if (cooldownLeft() > 0) {
-      els.helpForm.hidden = true;
-      setHelpStatus("ok", "✓ Staff have already been notified. Someone will be with you shortly.");
+    if (helpReq) {
+      els.helpForm.hidden = true;           // a request is already in progress; keep showing its status
     } else {
       els.helpForm.hidden = false;
       setHelpStatus("", "");
@@ -372,35 +375,52 @@
 
   function sendHelp() {
     var deskPhone = txt((store.help_desk || {}).phone);
-    var who = onShift(storeNow());
-    if (!who.length) {
-      setHelpStatus("err", "Sorry, no staff member is on shift right now. Please go to the counter.", deskPhone);
-      return;
-    }
-    var where = txt(els.whereInput.value).slice(0, 80);
-    var lines = ["A customer needs help " + (where ? "at: " + where : "in the store") + "."];
-    if (lastItem) lines.push("Item: " + lastItem.name + " (" + lastItem.barcode + ")");
-    var body = lines.join("\n");
-    var server = (txt(staff.server) || "https://ntfy.sh").replace(/\/+$/, "");
-    var qs = "?title=" + encodeURIComponent("Customer needs help") + "&priority=5&tags=bell";
-
+    if (!helpApi) { setHelpStatus("err", "Staff alerts aren't set up. Please go to the counter.", deskPhone); return; }
+    var where = txt(els.whereInput.value).slice(0, 60);
+    var item = lastItem ? (lastItem.name + " (" + lastItem.barcode + ")") : "";
     els.sendHelp.disabled = true;
     setHelpStatus("", "Sending…");
-    Promise.all(who.map(function (s) {
-      return fetch(server + "/" + encodeURIComponent(txt(s.topic)) + qs, { method: "POST", body: body })
-        .then(function (r) { return r.ok; }, function () { return false; });
-    })).then(function (results) {
-      if (results.some(Boolean)) {
-        lsSet("pc_help_sent", String(Date.now()));
-        els.helpForm.hidden = true;
-        els.whereInput.value = "";
-        setHelpStatus("ok", "✓ Staff notified. Someone will be with you shortly.");
-        buzz();
-      } else {
+    api("/api/help", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ where: where, item: item }) })
+      .then(function (j) {
+        if (j.id) {
+          helpReq = j.id;
+          els.helpForm.hidden = true;
+          els.whereInput.value = "";
+          buzz();
+          setHelpStatus("wait", "🔔 Staff have been alerted. Waiting for someone to accept…");
+          pollHelp();
+        } else {
+          els.sendHelp.disabled = false;
+          setHelpStatus("err", (j.message || "Couldn't reach staff.") + " Please go to the counter.", deskPhone);
+          if (j.error === "no_staff") { helpAvailable = false; updateHelpButton(); }
+        }
+      }, function () {
         els.sendHelp.disabled = false;
         setHelpStatus("err", "Couldn't reach staff. Please go to the counter.", deskPhone);
+      });
+  }
+
+  function pollHelp() {
+    clearTimeout(helpPoll);
+    if (!helpReq) return;
+    api("/api/help/" + helpReq, { cache: "no-store" }).then(function (j) {
+      if (j.status === "accepted") {
+        setHelpStatus("ok", "✓ " + (j.by || "A staff member") + " is on the way to help you!");
+        buzz();
+        endHelp();
+      } else if (j.status === "expired" || j.status === "failed" || j.status === "unknown") {
+        setHelpStatus("err", "Sorry, everyone is busy right now. Please go to the counter.", txt((store.help_desk || {}).phone));
+        endHelp();
+      } else {
+        helpPoll = setTimeout(pollHelp, 3000);
       }
-    });
+    }, function () { helpPoll = setTimeout(pollHelp, 5000); });
+  }
+
+  function endHelp() {
+    clearTimeout(helpPoll);
+    helpReq = null;
+    updateHelpButton();
   }
 
   // ---------- Camera scanning ----------
@@ -499,14 +519,14 @@
 
   // Always open blank, even when the browser restores the page from its back/forward cache.
   window.addEventListener("pageshow", function (e) {
-    if (e.persisted) { clearResult(); els.helpPanel.hidden = true; loadProducts(); loadConfig(); }
+    if (e.persisted) { clearResult(); if (!helpReq) els.helpPanel.hidden = true; loadProducts(); loadConfig(); }
   });
   // Pick up price/staff changes when the customer returns to the tab.
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible") { loadProducts(); loadConfig(); }
     else if (scanning) stopCamera().then(function () { if (els.result.hidden) els.scanBtn.hidden = false; });
   });
-  setInterval(refreshTimed, 30 * 1000); // shifts start/end and opening hours change over time
+  setInterval(function () { refreshTimed(); checkHelpAvailable(); }, 30 * 1000); // shifts and hours change over time
 
   clearResult();
   loadProducts();

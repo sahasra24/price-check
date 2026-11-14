@@ -1,7 +1,0 @@
-{
-  "server": "https://ntfy.sh",
-  "staff": [
-    { "name": "Owner (test)", "topic": "triveni-owner-40bkk4b41l",
-      "shifts": [ { "days": "Daily", "start": "00:00", "end": "24:00" } ] }
-  ]
-}

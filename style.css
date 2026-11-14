@@ -157,6 +157,9 @@ h1 { font-size: 30px; margin: 8px 0 4px; letter-spacing: -.01em; }
 .help-status:empty { display: none; }
 .help-status.ok { color: var(--price); }
 .help-status.err { color: var(--warn-text); }
+.help-status.wait { color: var(--text); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .help-status.wait { animation: none; } }
 .help-status a { color: var(--accent); }
 
 /* Store info */

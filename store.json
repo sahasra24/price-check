@@ -3,6 +3,7 @@
   "address": "",
   "map_url": "",
   "timezone": "America/Toronto",
+  "help_api": "",
   "hours": {
     "Mon": "",
     "Tue": "",
@@ -12,7 +13,14 @@
     "Sat": "",
     "Sun": ""
   },
-  "help_desk": { "phone": "", "email": "" },
-  "manager": { "name": "", "phone": "", "email": "" },
+  "help_desk": {
+    "phone": "",
+    "email": ""
+  },
+  "manager": {
+    "name": "",
+    "phone": "",
+    "email": ""
+  },
   "notes": ""
 }

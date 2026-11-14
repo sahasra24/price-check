@@ -1,0 +1,17 @@
+name = "price-check-help"
+main = "src/index.js"
+compatibility_date = "2025-10-01"
+
+[vars]
+TIMEZONE = "America/Toronto"
+ALLOWED_ORIGINS = "https://sahasra24.github.io,http://127.0.0.1:8765,http://localhost:8000"
+NTFY_SERVER = "https://ntfy.sh"
+PUBLIC_URL = ""
+
+[[d1_databases]]
+binding = "DB"
+database_name = "price-check-help"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[triggers]
+crons = ["* * * * *"]
