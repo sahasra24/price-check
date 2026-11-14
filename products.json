@@ -1,4 +1,4 @@
 [
   {"barcode": "7622210644817", "name": "Dairy Milk Fruit and Nut 100g", "price": 4.99},
-  {"barcode": "7622300737931", "name": "Dairy Milk Caramel", "price": 3.99}
+  {"barcode": "7622300737931", "name": "Dairy Milk Caramel", "price": 3.99, "sale_price": 2.99, "sale_start": "2026-11-14", "sale_end": "2026-11-15"}
 ]
