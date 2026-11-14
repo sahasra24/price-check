@@ -56,12 +56,14 @@ Everything in `store.json` is public. Use work phone numbers and emails, not per
 
 ## Staff alerts ("Need help? Call a staff member")
 
-The button only appears while someone is on shift. When a customer taps it:
-1. Everyone **on shift right now** gets an urgent ntfy alert ("Customer needs help - Aisle 3") with an **Accept** button.
-2. The first person to tap **Accept** gets the job. The alert on everyone else's phone changes to
-   "Shyam is helping the customer at Aisle 3", and their phones stop ringing.
+Alerts go through the store's Telegram bot, **@Triveni_Waxhaw_bot**. The button only appears while
+someone who is connected to the bot is on shift. When a customer taps it:
+1. Everyone **on shift right now** gets a Telegram message: "Customer needs help · Aisle 3" with an **✅ Accept** button.
+2. The first person to tap **Accept** gets the job. Everyone else's message changes to
+   "Shyam is helping the customer at Aisle 3". A late tap shows "Already taken by Shyam".
 3. The customer's screen shows "✓ Shyam is on the way".
-4. If nobody accepts, everyone is reminded every 30 seconds. After 3 minutes the customer is asked to go to the counter.
+4. If nobody accepts, a fresh alert (with sound) is sent every 30 seconds. After 3 minutes the messages
+   change to "Missed" and the customer is asked to go to the counter.
 
 **Points:** 3 for accepting within 30 seconds, 2 within 1 minute, 1 after that.
 
@@ -72,19 +74,21 @@ The button only appears while someone is on shift. When a customer taps it:
 
 **Changing shifts each week:** open the shift editor, enter the owner PIN, and set each person's start and end
 time per day. Leave a day empty for a day off. Tap **Save shifts**; it's live straight away. You can also
-add or remove people, pause someone who's on leave, and send a test alert to check their phone.
+add or remove people, pause someone who's on leave, and send a test alert.
 
-**Setting up a staff phone (once per person):**
-1. Install the free **ntfy** app ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) /
-   [iPhone](https://apps.apple.com/app/ntfy/id1625396347)) and allow notifications.
-2. Tap **+** and type the person's **ntfy code** from the shift editor, e.g. `triveni-shyam-xxxxxxxxxx`.
-3. **Android:** in ntfy Settings, turn on **Keep alerting for highest priority** so the phone keeps ringing
-   until someone accepts. Also turn on **Instant delivery**.
-   **iPhone:** Settings → Notifications → ntfy: allow notifications, sounds and Time Sensitive. On iPhone,
-   tap the alert to open it, then tap **Accept**.
+**Connecting a staff phone (once per person):**
+1. Install **Telegram** and sign in.
+2. Open the person's **personal link** from the shift editor (it looks like `https://t.me/Triveni_Waxhaw_bot?start=...`)
+   and tap **Start**. The bot replies "You're connected".
+3. Keep notifications **on** for the bot chat. Don't mute it.
 4. In the shift editor, tap **Send test alert** for that person.
 
-The staff list, shifts and ntfy codes are private. They live in the help service's database, not on this public site.
+Keep personal links private. If a link is shared by mistake or someone leaves, tap **Disconnect** in the
+shift editor: they stop getting alerts and a fresh link is made.
+
+The bot token, PINs, staff list and shifts are private. They live in Cloudflare (secrets and database), not on this public site.
+If the bot token ever leaks, send `/revoke` to @BotFather, then store the new token with
+`cd worker` and `npx wrangler secret put TELEGRAM_TOKEN`.
 
 **The help service** is the `worker/` folder, running free on Cloudflare (account skoppal@gitam.in).
 To update its code: `cd worker`, then `npx wrangler deploy`.
