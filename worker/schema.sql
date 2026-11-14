@@ -22,3 +22,7 @@ CREATE TABLE IF NOT EXISTS settings (
   value      TEXT NOT NULL,
   updated_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS staff_seen (
+  key       TEXT PRIMARY KEY,           -- staff key (slug of name)
+  last_seen INTEGER NOT NULL            -- last time their Staff Alert app checked in
+);

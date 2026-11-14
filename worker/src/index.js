@@ -28,6 +28,11 @@ export default {
       if (p === "/api/help" && req.method === "POST") { const [b, s] = await createHelp(req, env); return json(b, cors, s); }
       if ((m = p.match(/^\/api\/help\/([a-z0-9]{12})$/)) && req.method === "GET") return json(await helpState(m[1], env, ctx), cors);
       if (p === "/tg/hook" && req.method === "POST") return telegramHook(req, env, ctx);
+      if ((m = p.match(/^\/staff\/([A-Za-z0-9_-]{8,64})$/))) return staffPage(env, m[1]);
+      if ((m = p.match(/^\/staff\/([A-Za-z0-9_-]{8,64})\/manifest\.webmanifest$/))) return staffManifest(m[1]);
+      if (p === "/staff-icon.svg") return new Response(STAFF_ICON, { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } });
+      if ((m = p.match(/^\/api\/staff\/([A-Za-z0-9_-]{8,64})\/state$/)) && req.method === "GET") return staffState(env, ctx, m[1]);
+      if ((m = p.match(/^\/api\/staff\/([A-Za-z0-9_-]{8,64})\/accept\/([a-z0-9]{12})$/)) && req.method === "POST") return staffAccept(env, ctx, m[1], m[2]);
       if (p === "/board") return board(req, env);
       if (p === "/admin" || p.startsWith("/admin/")) return admin(req, env, p);
       if (p === "/") return new Response("Price Check staff-help service is running.", { headers: { "content-type": "text/plain" } });
@@ -147,11 +152,17 @@ async function saveStaffData(env, data) {
     .bind(JSON.stringify({ staff: data.staff }), Date.now()).run();
 }
 // People who can receive alerts right now: active, on shift, and connected to Telegram.
+const APP_SEEN_MS = 2 * 60 * 1000;   // staff app counts as "connected" if it checked in within 2 minutes
+async function appSeen(env) {
+  const rows = (await env.DB.prepare("SELECT key FROM staff_seen WHERE last_seen > ?").bind(Date.now() - APP_SEEN_MS).all()).results || [];
+  return new Set(rows.map((r) => r.key));
+}
 async function onShift(env) {
   const now = storeNow(env);
   const { staff } = await loadStaffData(env);
-  return staff.filter((s) => s && s.name && s.chat_id && s.active !== false && isOnShift(s, now))
-    .map((s) => ({ key: slug(s.name), name: s.name, chat_id: s.chat_id }));
+  const seen = await appSeen(env);
+  return staff.filter((s) => s && s.name && s.active !== false && isOnShift(s, now) && (s.chat_id || seen.has(slug(s.name))))
+    .map((s) => ({ key: slug(s.name), name: s.name, chat_id: s.chat_id || null, app: seen.has(slug(s.name)) }));
 }
 
 // ---------- Telegram ----------
@@ -189,6 +200,7 @@ async function ringAll(r, env) {
   const people = JSON.parse(r.staff_json);
   const msgs = JSON.parse(r.msgs_json || "{}");
   const results = await Promise.all(people.map(async (p) => {
+    if (!p.chat_id) return false;                      // staff-app-only person: the app rings by itself
     if (msgs[p.key]) await tg(env, "deleteMessage", { chat_id: p.chat_id, message_id: msgs[p.key] });
     const j = await tg(env, "sendMessage", { chat_id: p.chat_id, text: alertText(r), parse_mode: "HTML", reply_markup: acceptKeyboard(r.id) });
     if (j.ok) msgs[p.key] = j.result.message_id;
@@ -198,7 +210,7 @@ async function ringAll(r, env) {
   // If someone accepted while we were sending, tidy up the messages we just sent.
   const now = await env.DB.prepare("SELECT * FROM requests WHERE id = ?").bind(r.id).first();
   if (now && now.status !== "open") await finalMessages(now, env);
-  return results.some(Boolean);
+  return results.some(Boolean) || people.some((p) => p.app);
 }
 
 // Replace every alert message with the outcome (no buttons).
@@ -207,7 +219,7 @@ async function finalMessages(r, env, skipKey) {
   const msgs = JSON.parse(r.msgs_json || "{}");
   const where = r.where_txt || "in the store";
   await Promise.all(people.map((p) => {
-    if (!msgs[p.key] || p.key === skipKey) return null;
+    if (!p.chat_id || !msgs[p.key] || p.key === skipKey) return null;
     let text;
     if (r.status === "accepted") text = p.key === r.accepted_by
       ? `✅ <b>You're helping</b> the customer at ${esc(where)} (+${r.points} pts)`
@@ -248,29 +260,36 @@ async function onMessage(msg, env) {
 
 function pointsFor(ms) { return ms <= 30000 ? 3 : ms <= 60000 ? 2 : 1; }
 
+// First accept wins (atomic). Returns { ok, pts, r } or { ok: false, msg, r }.
+async function acceptRequest(env, r, person) {
+  const now = Date.now();
+  const pts = pointsFor(now - r.created_at);
+  const res = await env.DB.prepare(`UPDATE requests SET status = 'accepted', accepted_by = ?, accepted_name = ?, accepted_at = ?, points = ?
+                                    WHERE id = ? AND status = 'open' AND created_at > ?`)
+    .bind(person.key, person.name, now, pts, r.id, now - EXPIRE_AFTER_MS).run();
+  const cur = await env.DB.prepare("SELECT * FROM requests WHERE id = ?").bind(r.id).first();
+  if (res.meta.changes === 1) return { ok: true, pts, r: cur };
+  const msg = cur.status === "accepted"
+    ? (cur.accepted_by === person.key ? "You already accepted this one." : `Already taken by ${cur.accepted_name}.`)
+    : "This request has expired.";
+  return { ok: false, msg, r: cur };
+}
+
 async function onButton(cb, env) {
   const answer = (text, alert = false) => tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text, show_alert: alert });
   const m = String(cb.data || "").match(/^a:([a-z0-9]{12})$/);
   if (!m) return answer("");
-  const id = m[1];
-  const r = await env.DB.prepare("SELECT * FROM requests WHERE id = ?").bind(id).first();
+  const r = await env.DB.prepare("SELECT * FROM requests WHERE id = ?").bind(m[1]).first();
   if (!r) return answer("This request no longer exists.", true);
   const person = JSON.parse(r.staff_json).find((p) => p.chat_id === cb.from.id);
   if (!person) return answer("You weren't on this alert.", true);
 
-  const now = Date.now();
-  const pts = pointsFor(now - r.created_at);
-  const res = await env.DB.prepare(`UPDATE requests SET status = 'accepted', accepted_by = ?, accepted_name = ?, accepted_at = ?, points = ?
-                                    WHERE id = ? AND status = 'open'`).bind(person.key, person.name, now, pts, id).run();
-  if (res.meta.changes === 1) {
-    const done = await env.DB.prepare("SELECT * FROM requests WHERE id = ?").bind(id).first();
-    await Promise.all([answer(`✅ Accepted! Go to ${r.where_txt || "the customer"}. +${pts} pts`), finalMessages(done, env)]);
+  const res = await acceptRequest(env, r, person);
+  if (res.ok) {
+    await Promise.all([answer(`✅ Accepted! Go to ${r.where_txt || "the customer"}. +${res.pts} pts`), finalMessages(res.r, env)]);
     return;
   }
-  const cur = await env.DB.prepare("SELECT * FROM requests WHERE id = ?").bind(id).first();
-  const msg = cur.status === "accepted"
-    ? (cur.accepted_by === person.key ? "You already accepted this one." : `Already taken by ${cur.accepted_name}.`)
-    : "This request has expired.";
+  const cur = res.r, msg = res.msg;
   await answer(msg, true);
   if (cb.message) {
     const where = cur.where_txt || "in the store";
@@ -517,6 +536,7 @@ async function admin(req, env, p) {
     const on = s.active !== false && isOnShift(s, now);
     const label = s.active === false ? "Paused" : on ? "On shift now" : "Off now";
     const link = bot ? `https://t.me/${bot}?start=${s.link}` : "";
+    const appLink = `${(env.PUBLIC_URL || url.origin).replace(/\/+$/, "")}/staff/${s.link}`;
     const tgLine = s.chat_id
       ? `<div class="row small"><span class="ok">✓ Telegram connected</span>
          <button class="btn2" type="submit" form="test_${slug(s.name)}">🔔 Send test alert</button>
@@ -527,6 +547,8 @@ async function admin(req, env, p) {
       <input type="hidden" name="orig_${i}" value="${esc(s.name)}">
       <div class="row"><label>Name <input name="name_${i}" value="${esc(s.name)}" style="min-height:40px;width:160px"></label></div>
       ${tgLine}
+      <div class="box small">🔔 <b>Staff Alert app</b> (rings until someone accepts). Send ${esc(s.name)} this link:<br>
+        <span class="code">${esc(appLink)}</span></div>
       ${dayRows(s, i)}
       <div class="row"><label><input type="checkbox" name="paused_${i}" ${s.active === false ? "checked" : ""}> Pause alerts (holiday/leave)</label>
       <label><input type="checkbox" name="remove_${i}"> Remove person</label></div></div>`;
@@ -546,3 +568,275 @@ ${dayRows({}, n)}</div>
 <button type="submit">💾 Save shifts</button></form>${forms}
 <p class="small"><a href="/board">🏆 Staff points</a></p>`, ADMIN_CSS));
 }
+
+// ---------- Staff Alert app (/staff/<link>) ----------
+// A web app each staff member keeps open during their shift. It checks for alerts every 3 s and rings
+// (loud repeating alarm + vibration) until someone accepts, then shows who accepted.
+async function findByLink(env, link) {
+  const data = await loadStaffData(env);
+  return data.staff.find((s) => s.link && sameString(s.link, link)) || null;
+}
+
+async function staffState(env, ctx, link) {
+  const s = await findByLink(env, link);
+  if (!s) return json({ error: "unknown" }, {}, 404);
+  const key = slug(s.name), now = Date.now();
+  // Mark this person's app as open (at most one write every 30 s).
+  await env.DB.prepare(`INSERT INTO staff_seen (key, last_seen) VALUES (?, ?)
+                        ON CONFLICT(key) DO UPDATE SET last_seen = excluded.last_seen
+                        WHERE excluded.last_seen - staff_seen.last_seen > 30000`).bind(key, now).run();
+  const r = await env.DB.prepare(`SELECT * FROM requests WHERE staff_json LIKE ? AND created_at > ? AND status != 'failed'
+                                  ORDER BY created_at DESC LIMIT 1`).bind(`%"key":"${key}"%`, now - 10 * 60 * 1000).first();
+  let request = null;
+  if (r) {
+    let st = r.status;
+    if (st === "open") {
+      ctx.waitUntil(tick(r, env));
+      if (now - r.created_at >= EXPIRE_AFTER_MS) st = "expired";
+    }
+    request = { id: r.id, status: st, where: r.where_txt || "", item: r.item || "", created_at: r.created_at,
+                accepted_name: r.accepted_name || null, accepted_at: r.accepted_at || null, mine: r.accepted_by === key, points: r.points || 0 };
+  }
+  return json({ name: s.name, on_shift: s.active !== false && isOnShift(s, storeNow(env)), paused: s.active === false,
+                telegram: !!s.chat_id, now, request });
+}
+
+async function staffAccept(env, ctx, link, id) {
+  const s = await findByLink(env, link);
+  if (!s) return json({ ok: false, msg: "Unknown staff link." }, {}, 404);
+  const r = await env.DB.prepare("SELECT * FROM requests WHERE id = ?").bind(id).first();
+  if (!r) return json({ ok: false, msg: "This request no longer exists." }, {}, 404);
+  const person = JSON.parse(r.staff_json).find((p) => p.key === slug(s.name));
+  if (!person) return json({ ok: false, msg: "You weren't on this alert." }, {}, 403);
+  const res = await acceptRequest(env, r, person);
+  if (res.ok) ctx.waitUntil(finalMessages(res.r, env));       // update everyone's Telegram messages too
+  return json({ ok: res.ok, points: res.pts || 0, msg: res.msg || "", where: r.where_txt || "", accepted_name: res.r.accepted_name || null },
+              {}, res.ok ? 200 : 409);
+}
+
+function staffManifest(link) {
+  return new Response(JSON.stringify({
+    name: "Staff Alerts", short_name: "Staff Alerts", start_url: `/staff/${link}`, scope: `/staff/${link}`,
+    display: "standalone", background_color: "#0b0f19", theme_color: "#0b0f19",
+    icons: [{ src: "/staff-icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" }],
+  }), { headers: { "content-type": "application/manifest+json", "cache-control": "no-store" } });
+}
+
+const STAFF_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#dc2626"/>
+<path d="M256 96c-62 0-104 48-104 112v72l-40 56h288l-40-56v-72c0-64-42-112-104-112z" fill="#fff"/><circle cx="256" cy="380" r="36" fill="#fff"/></svg>`;
+
+async function staffPage(env, link) {
+  const s = await findByLink(env, link);
+  if (!s) return html(page("Staff Alerts", `<h1>Link not valid</h1><p>Ask the store owner for your Staff Alerts link.</p>`), 404);
+  return html(STAFF_HTML.split("__LINK__").join(esc(link)).split("__NAME__").join(esc(s.name)));
+}
+
+const STAFF_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0f19"><meta name="robots" content="noindex">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Staff Alerts">
+<link rel="manifest" href="/staff/__LINK__/manifest.webmanifest"><link rel="icon" href="/staff-icon.svg">
+<title>Staff Alerts</title>
+<style>
+:root{--bg:#0b0f19;--card:#151a26;--text:#f3f4f6;--muted:#9ca3af;--line:#262d3d;--ok:#34d399;--red:#dc2626;--accent:#60a5fa}
+*{box-sizing:border-box}html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:18px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-user-select:none;user-select:none}
+[hidden]{display:none!important}
+.screen{min-height:100vh;padding:max(24px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom));max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.center{justify-content:center;text-align:center}
+h1{margin:0;font-size:28px;letter-spacing:-.02em}
+.muted{color:var(--muted)}.small{font-size:14px}
+.logo{width:88px;height:88px;margin:0 auto;border-radius:26px;background:var(--red);display:grid;place-items:center;font-size:46px}
+.who{font-size:22px;font-weight:700;margin:0}
+button{font:inherit;font-weight:700;border:0;border-radius:18px;cursor:pointer;width:100%;-webkit-tap-highlight-color:transparent}
+button:active{transform:scale(.98)}
+.big{min-height:72px;font-size:22px;background:#fff;color:#0b0f19}
+.secondary{min-height:56px;background:var(--card);color:var(--text);border:1px solid var(--line)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:18px}
+.on{color:var(--ok);font-weight:700;margin:0 0 4px}
+.pill{display:inline-block;margin:6px 0 0;padding:4px 12px;border-radius:999px;font-size:14px;font-weight:700;background:var(--line)}
+.pill.yes{background:rgba(52,211,153,.18);color:var(--ok)}
+.alarm{background:var(--red);max-width:none;justify-content:center;text-align:center;animation:flash 1s steps(1) infinite}
+@keyframes flash{50%{background:#7f1d1d}}
+.siren{font-size:84px;line-height:1;animation:shake .5s ease-in-out infinite}
+@keyframes shake{0%,100%{transform:rotate(-12deg)}50%{transform:rotate(12deg)}}
+.where{font-size:34px;font-weight:800;margin:0}
+.item{margin:0;font-size:18px;opacity:.9}
+.accept{min-height:96px;font-size:26px;background:#fff;color:#7f1d1d;box-shadow:0 10px 30px rgba(0,0,0,.35);max-width:520px;margin:12px auto 0}
+.age{opacity:.85;margin:0}
+.done{font-size:24px;font-weight:700;text-align:center;padding:28px 18px}
+.done .icon{font-size:64px;display:block;margin-bottom:8px}
+.err{color:#fca5a5}
+</style></head><body>
+
+<div id="start" class="screen center">
+  <div class="logo">🔔</div>
+  <h1>Staff Alerts</h1>
+  <p class="who">__NAME__</p>
+  <p class="muted">Tap below to switch on the alarm. Keep this screen open during your shift. The alarm rings until someone accepts.</p>
+  <button id="startBtn" class="big">Turn on alerts</button>
+  <p class="muted small">Tip: add this page to your home screen so it opens like an app.</p>
+</div>
+
+<div id="idle" class="screen" hidden>
+  <div><h1>Hi __NAME__</h1><p id="shift" class="pill"></p></div>
+  <div class="card"><p class="on">● Alerts are ON</p>
+    <p class="muted" style="margin:0">If a customer needs help, this phone rings until someone taps Accept. Keep this screen open, with the volume up.</p></div>
+  <div id="last" class="card" hidden></div>
+  <button id="testBtn" class="secondary">🔊 Test the alarm (3 seconds)</button>
+  <p id="conn" class="muted small"></p>
+</div>
+
+<div id="ring" class="screen alarm" hidden>
+  <div class="siren">🚨</div>
+  <h1>Customer needs help</h1>
+  <p id="rWhere" class="where"></p>
+  <p id="rItem" class="item"></p>
+  <button id="acceptBtn" class="accept">✅ ACCEPT — I'm going</button>
+  <p id="rAge" class="age"></p>
+</div>
+
+<div id="done" class="screen center" hidden>
+  <div id="doneBox" class="card done"></div>
+  <button id="okBtn" class="secondary">OK</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var LINK = "__LINK__";
+  var audio = null, keepAlive = null, ringTimer = null, vibTimer = null, titleTimer = null, wake = null;
+  var current = null, doneFor = null, doneUntil = 0, accepting = false;
+  function $(id) { return document.getElementById(id); }
+  function show(id) { ["start", "idle", "ring", "done"].forEach(function (x) { $(x).hidden = (x !== id); }); }
+
+  function ensureAudio() {
+    try {
+      if (!audio) { var AC = window.AudioContext || window.webkitAudioContext; audio = new AC(); }
+      if (audio.state === "suspended") audio.resume();
+    } catch (e) {}
+  }
+  // A very quiet, inaudible tone keeps the page active so alerts still arrive with the screen dimmed (Android).
+  function startKeepAlive() {
+    try {
+      if (keepAlive || !audio) return;
+      var o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = 25; g.gain.value = 0.0006;
+      o.connect(g); g.connect(audio.destination); o.start(); keepAlive = o;
+    } catch (e) {}
+  }
+  function beep() {
+    if (!audio) return;
+    var t = audio.currentTime;
+    [0, 0.3, 0.6].forEach(function (d, i) {
+      var o = audio.createOscillator(), g = audio.createGain();
+      o.type = "square"; o.frequency.setValueAtTime(i % 2 ? 740 : 988, t + d);
+      g.gain.setValueAtTime(0.0001, t + d);
+      g.gain.exponentialRampToValueAtTime(0.8, t + d + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.26);
+      o.connect(g); g.connect(audio.destination); o.start(t + d); o.stop(t + d + 0.28);
+    });
+  }
+  function startRing() {
+    if (ringTimer) return;
+    window.__ringing = true;
+    ensureAudio(); beep();
+    ringTimer = setInterval(function () { ensureAudio(); beep(); }, 1100);
+    if (navigator.vibrate) {
+      navigator.vibrate([700, 300, 700, 300, 700]);
+      vibTimer = setInterval(function () { navigator.vibrate([700, 300, 700, 300, 700]); }, 3000);
+    }
+    var on = false;
+    titleTimer = setInterval(function () { on = !on; document.title = on ? "🚨 CUSTOMER NEEDS HELP" : "Staff Alerts"; }, 700);
+  }
+  function stopRing() {
+    window.__ringing = false;
+    clearInterval(ringTimer); ringTimer = null;
+    clearInterval(vibTimer); vibTimer = null;
+    clearInterval(titleTimer); titleTimer = null; document.title = "Staff Alerts";
+    if (navigator.vibrate) navigator.vibrate(0);
+  }
+  function keepAwake() {
+    try { if ("wakeLock" in navigator && document.visibilityState === "visible" && !wake) {
+      navigator.wakeLock.request("screen").then(function (w) { wake = w; w.addEventListener("release", function () { wake = null; }); }).catch(function () {});
+    } } catch (e) {}
+  }
+
+  function showDone(icon, text, ms) {
+    $("doneBox").innerHTML = "";
+    var i = document.createElement("span"); i.className = "icon"; i.textContent = icon;
+    $("doneBox").appendChild(i); $("doneBox").appendChild(document.createTextNode(text));
+    doneUntil = Date.now() + (ms || 60000);
+    show("done");
+  }
+
+  function render(s) {
+    if (s.error) { stopRing(); show("start"); $("startBtn").hidden = true; document.querySelector("#start .muted").textContent = "This link isn't valid any more. Ask the store owner for a new one."; return; }
+    $("conn").textContent = "Connected · checked " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    $("conn").className = "muted small";
+    $("shift").textContent = s.paused ? "Alerts paused by owner" : s.on_shift ? "On shift now" : "Off shift now";
+    $("shift").className = "pill" + (s.on_shift && !s.paused ? " yes" : "");
+    var r = s.request;
+    current = r;
+    if (r) {
+      var where = r.where || "in the store";
+      var last = r.status === "accepted" ? (r.mine ? "You helped the customer at " + where + " (+" + r.points + " pts)" : r.accepted_name + " helped the customer at " + where)
+        : r.status === "expired" ? "Missed: customer at " + where : "Customer at " + where;
+      $("last").textContent = "Last alert: " + last; $("last").hidden = false;
+    }
+    if (r && r.status === "open") {
+      $("rWhere").textContent = "📍 " + (r.where || "In the store");
+      $("rItem").textContent = r.item ? "🛒 " + r.item : "";
+      $("rAge").textContent = "Alert sent " + Math.max(0, Math.round((s.now - r.created_at) / 1000)) + " s ago";
+      if (!accepting) { show("ring"); startRing(); }
+      return;
+    }
+    stopRing();
+    // The alarm was showing and the alert just ended: say how it ended (who accepted, or missed).
+    if (r && r.id !== doneFor && (r.status === "accepted" || r.status === "expired") && $("ring").hidden === false) {
+      doneFor = r.id;
+      if (r.status === "accepted") showDone(r.mine ? "✅" : "👍", r.mine ? "You accepted (+" + r.points + " pts). Go to " + (r.where || "the customer") + "."
+                                                        : r.accepted_name + " accepted. They're going to " + (r.where || "the customer") + ".");
+      else showDone("❌", "Missed: nobody accepted in time.");
+      return;
+    }
+    if (!$("done").hidden && Date.now() < doneUntil) return;
+    show("idle");
+  }
+
+  function poll() {
+    fetch("/api/staff/" + LINK + "/state", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(render)
+      .catch(function () { $("conn").textContent = "⚠️ Connection problem. Retrying…"; $("conn").className = "small err"; })
+      .then(function () { setTimeout(poll, 3000); });
+  }
+
+  $("startBtn").addEventListener("click", function () {
+    ensureAudio(); startKeepAlive(); keepAwake();
+    if (navigator.vibrate) navigator.vibrate(80);
+    show("idle"); poll();
+  });
+  $("testBtn").addEventListener("click", function () {
+    if (ringTimer) return;
+    startRing(); setTimeout(function () { if (!current || current.status !== "open") stopRing(); }, 3000);
+  });
+  $("acceptBtn").addEventListener("click", function () {
+    if (!current || accepting) return;
+    accepting = true; stopRing();
+    $("acceptBtn").textContent = "Accepting…";
+    var id = current.id;
+    fetch("/api/staff/" + LINK + "/accept/" + id, { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        doneFor = id;
+        if (j.ok) showDone("✅", "You accepted (+" + j.points + " pts). Go to " + (j.where || "the customer") + ".");
+        else showDone("👍", j.msg || "Someone else accepted.");
+      })
+      .catch(function () { showDone("⚠️", "Couldn't reach the server. Go to the customer anyway and tell the team."); })
+      .then(function () { accepting = false; $("acceptBtn").textContent = "✅ ACCEPT — I'm going"; });
+  });
+  $("okBtn").addEventListener("click", function () { doneUntil = 0; show("idle"); });
+  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") { ensureAudio(); keepAwake(); } });
+})();
+</script></body></html>`;

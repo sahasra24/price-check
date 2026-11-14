@@ -65,6 +65,13 @@ someone who is connected to the bot is on shift. When a customer taps it:
 4. If nobody accepts, a fresh alert (with sound) is sent every 30 seconds. After 3 minutes the messages
    change to "Missed" and the customer is asked to go to the counter.
 
+**Staff Alert app (rings until someone accepts):** each person also has a personal app link, shown in the
+shift editor, like `https://price-check-help.triveni-waxhaw.workers.dev/staff/...`. They open it, tap
+**Turn on alerts**, and keep it open during their shift (add it to the home screen). When a customer asks for help
+it rings loudly and keeps ringing, and vibrates on Android, until someone taps **ACCEPT**. Then every phone shows who accepted.
+Accepting in the app or in Telegram does the same thing. The app has to be open: a web page can't ring a
+locked iPhone, and Android may stop it once the phone locks. Keep it on screen, for example on a phone at the counter.
+
 **Points:** 3 for accepting within 30 seconds, 2 within 1 minute, 1 after that.
 
 | Page | Link | Who |
