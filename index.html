@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121417" media="(prefers-color-scheme: dark)">
+  <title>Price Check</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="top">
+      <h1>Price Check</h1>
+      <p class="sub">Scan any item's barcode to see its price.</p>
+    </header>
+
+    <!-- Result card (hidden until a scan) -->
+    <section id="result" class="card result" hidden aria-live="polite">
+      <button id="clearBtn" class="clear" type="button" aria-label="Clear result">✕ Clear</button>
+      <div id="found">
+        <p id="pName" class="name"></p>
+        <p id="pPrice" class="price"></p>
+      </div>
+      <p id="notFound" class="notfound" hidden>Price not available — please ask a staff member.</p>
+      <p class="code">Barcode: <span id="pCode"></span></p>
+      <button id="againBtn" class="btn primary" type="button">Scan another</button>
+    </section>
+
+    <!-- Live camera -->
+    <section id="camWrap" class="card cam" hidden>
+      <div id="reader"></div>
+      <p class="hint">Point the camera at the barcode</p>
+      <button id="stopBtn" class="btn ghost" type="button">Cancel</button>
+    </section>
+
+    <button id="scanBtn" class="btn primary big" type="button">
+      <span aria-hidden="true">📷</span> Scan to see the price
+    </button>
+
+    <p id="msg" class="msg" role="status"></p>
+
+    <div class="alt">
+      <label class="btn secondary" for="photoInput">Take a photo instead</label>
+      <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+
+      <form id="typeForm" class="type" autocomplete="off">
+        <label for="codeInput">Type the number under the barcode</label>
+        <div class="row">
+          <input id="codeInput" type="text" inputmode="numeric" placeholder="e.g. 7622210644817">
+          <button class="btn secondary" type="submit">Check</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="fileReader" hidden></div>
+
+    <footer class="foot">Final price confirmed at checkout.</footer>
+  </main>
+
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

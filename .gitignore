@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+~$*.xlsx
+.DS_Store
+
+# Private store data - never upload. Only products.json is published.
+*.xlsx
+*.xls
+*.xlsm
+*.csv
