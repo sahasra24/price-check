@@ -4,19 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#121417" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#4f46e5">
   <title>Price Check</title>
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
-  <main class="wrap">
-    <header class="top">
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="logo" aria-hidden="true">🏷️</div>
       <h1 id="storeName">Price Check</h1>
       <p id="sub" class="sub">Scan any item's barcode to see its price.</p>
       <p id="openStatus" class="open-status" hidden></p>
-    </header>
+    </div>
+  </header>
 
+  <main class="wrap">
     <!-- Result card (hidden until a scan) -->
     <section id="result" class="card result" hidden aria-live="polite">
       <button id="clearBtn" class="clear" type="button" aria-label="Clear result">✕ Clear</button>
@@ -29,8 +31,8 @@
         <p id="pSaleNote" class="sale-note" hidden></p>
       </div>
       <p id="notFound" class="notfound" hidden>Price not available — please ask a staff member.</p>
-      <p class="code">Barcode: <span id="pCode"></span></p>
-      <button id="againBtn" class="btn primary" type="button">Scan another</button>
+      <p class="code">Barcode <span id="pCode"></span></p>
+      <button id="againBtn" class="btn primary" type="button"><span aria-hidden="true">📷</span> Scan another</button>
     </section>
 
     <!-- Live camera -->
@@ -40,47 +42,55 @@
       <button id="stopBtn" class="btn ghost" type="button">Cancel</button>
     </section>
 
-    <button id="scanBtn" class="btn primary big" type="button">
-      <span aria-hidden="true">📷</span> Scan to see the price
-    </button>
+    <!-- Ways to look up a price -->
+    <section class="card lookup">
+      <button id="scanBtn" class="btn primary big" type="button">
+        <span class="btn-icon" aria-hidden="true">📷</span> Scan to see the price
+      </button>
+      <p id="msg" class="msg" role="status"></p>
 
-    <p id="msg" class="msg" role="status"></p>
+      <div class="divider"><span>or</span></div>
 
-    <!-- Call staff (only shown while someone is on shift) -->
-    <button id="helpBtn" class="btn help-btn" type="button" hidden>
-      <span aria-hidden="true">🙋</span> Need help? Call a staff member
-    </button>
-    <section id="helpPanel" class="card help" hidden aria-live="polite">
-      <h2>Call a staff member</h2>
-      <form id="helpForm" autocomplete="off">
-        <label for="whereInput">Where are you? (optional)</label>
-        <input id="whereInput" type="text" maxlength="80" placeholder="e.g. Aisle 4, near the fridges">
-        <div class="row2">
-          <button id="sendHelp" class="btn primary" type="submit">Send alert</button>
-          <button id="cancelHelp" class="btn ghost" type="button">Cancel</button>
-        </div>
-      </form>
-      <p id="helpStatus" class="help-status"></p>
-    </section>
-
-    <div class="alt">
-      <label class="btn secondary" for="photoInput">Take a photo instead</label>
+      <label class="btn secondary" for="photoInput"><span aria-hidden="true">🖼️</span> Take a photo instead</label>
       <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
 
       <form id="typeForm" class="type" autocomplete="off">
         <label for="codeInput">Type the number under the barcode</label>
         <div class="row">
           <input id="codeInput" type="text" inputmode="numeric" placeholder="e.g. 7622210644817">
-          <button class="btn secondary" type="submit">Check</button>
+          <button class="btn dark" type="submit">Check</button>
         </div>
       </form>
-    </div>
+    </section>
 
     <!-- Store details (hidden until store.json has something in it) -->
     <details id="storeInfo" class="card info" hidden>
-      <summary>Store info, hours &amp; contact</summary>
+      <summary><span><span aria-hidden="true">🏪</span> Store info, hours &amp; contact</span></summary>
       <div id="infoBody"></div>
     </details>
+
+    <!-- Call staff: last on the page; only shown while someone is on shift -->
+    <section id="helpCard" class="card help-card" hidden>
+      <div class="help-head">
+        <div class="help-emoji" aria-hidden="true">🙋</div>
+        <div>
+          <h2>Need a hand?</h2>
+          <p>A team member on shift will come to you.</p>
+        </div>
+      </div>
+      <button id="helpBtn" class="btn help-btn" type="button" hidden>Call a staff member</button>
+      <div id="helpPanel" class="help" hidden aria-live="polite">
+        <form id="helpForm" autocomplete="off">
+          <label for="whereInput">Where are you? (optional)</label>
+          <input id="whereInput" type="text" maxlength="80" placeholder="e.g. Aisle 4, near the fridges">
+          <div class="row2">
+            <button id="sendHelp" class="btn primary" type="submit">Send alert</button>
+            <button id="cancelHelp" class="btn ghost" type="button">Cancel</button>
+          </div>
+        </form>
+        <p id="helpStatus" class="help-status"></p>
+      </div>
+    </section>
 
     <div id="fileReader" hidden></div>
 
@@ -88,6 +98,6 @@
   </main>
 
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

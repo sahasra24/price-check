@@ -10,7 +10,7 @@
     pPrice: $("pPrice"), pSave: $("pSave"), pSaleNote: $("pSaleNote"), pCode: $("pCode"),
     clearBtn: $("clearBtn"), againBtn: $("againBtn"),
     photoInput: $("photoInput"), typeForm: $("typeForm"), codeInput: $("codeInput"),
-    helpBtn: $("helpBtn"), helpPanel: $("helpPanel"), helpForm: $("helpForm"),
+    helpCard: $("helpCard"), helpBtn: $("helpBtn"), helpPanel: $("helpPanel"), helpForm: $("helpForm"),
     whereInput: $("whereInput"), sendHelp: $("sendHelp"), cancelHelp: $("cancelHelp"),
     helpStatus: $("helpStatus"),
     storeInfo: $("storeInfo"), infoBody: $("infoBody"),
@@ -346,7 +346,9 @@
   }
 
   function updateHelpButton() {
-    els.helpBtn.hidden = !(helpAvailable || helpReq);
+    var can = !!(helpAvailable || helpReq);
+    els.helpBtn.hidden = !can || !els.helpPanel.hidden;      // the form replaces the button while open
+    els.helpCard.hidden = !can && els.helpPanel.hidden;
     if (!helpAvailable && !helpReq && !els.helpPanel.hidden && !els.helpStatus.classList.contains("ok")) els.helpPanel.hidden = true;
   }
 
@@ -363,6 +365,7 @@
 
   function openHelp() {
     els.helpPanel.hidden = false;
+    updateHelpButton();
     if (helpReq) {
       els.helpForm.hidden = true;           // a request is already in progress; keep showing its status
     } else {
@@ -514,7 +517,7 @@
     stopCamera().then(function () { lookup(v); });
   });
   els.helpBtn.addEventListener("click", openHelp);
-  els.cancelHelp.addEventListener("click", function () { els.helpPanel.hidden = true; });
+  els.cancelHelp.addEventListener("click", function () { els.helpPanel.hidden = true; updateHelpButton(); });
   els.helpForm.addEventListener("submit", function (e) { e.preventDefault(); sendHelp(); });
 
   // Always open blank, even when the browser restores the page from its back/forward cache.
